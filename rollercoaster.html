@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Rollercoaster FPV</title>
+<style>
+* { margin: 0; padding: 0; }
+body { overflow: hidden; background: #000; }
+canvas { display: block; }
+#info {
+position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+color: #0ff; font-family: monospace; font-size: 14px;
+text-shadow: 0 0 10px #0ff, 0 0 20px #0ff;
+pointer-events: none; opacity: 0.8;
+}
+#speed {
+position: fixed; top: 20px; right: 30px;
+color: #f0f; font-family: monospace; font-size: 28px;
+text-shadow: 0 0 15px #f0f, 0 0 30px #f0f;
+pointer-events: none;
+}
+</style>
+</head>
+<body>
+<div id="info">NIGHT ROLLERCOASTER FPV</div>
+<div id="speed"></div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020010);
+scene.fog = new THREE.FogExp2(0x020010, 0.002);
+
+const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 2000);
+
+// --- GENERATE ROLLERCOASTER TRACK ---
+function generateTrack() {
+  const points = [];
+  const N = 1200;
+
+  // Build a complex multi-featured track from segments
+  // Each segment type creates a different section of the ride
+  function lerp3(a, b, t) {
+    return new THREE.Vector3(
+      a.x + (b.x - a.x) * t,
+      a.y + (b.y - a.y) * t,
+      a.z + (b.z - a.z) * t
+    );
+  }
+
+  let cur = new THREE.Vector3(0, 20, 0);
+  let dir = new THREE.Vector3(1, 0, 0);
+  let up = new THREE.Vector3(0, 1, 0);
+
+  const segments = [];
+
+  function addHelix(center, axis, radius, turns, heightDelta, steps, chirality) {
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const angle = f * turns * Math.PI * 2 * chirality;
+      const perp1 = new THREE.Vector3().crossVectors(axis, new THREE.Vector3(0, 1, 0));
+      if (perp1.length() < 0.01) perp1.crossVectors(axis, new THREE.Vector3(1, 0, 0));
+      perp1.normalize();
+      const perp2 = new THREE.Vector3().crossVectors(axis, perp1).normalize();
+      const r = radius * (1 - 0.3 * Math.sin(f * Math.PI));
+      const p = center.clone()
+        .add(axis.clone().multiplyScalar(f * heightDelta))
+        .add(perp1.clone().multiplyScalar(Math.cos(angle) * r))
+        .add(perp2.clone().multiplyScalar(Math.sin(angle) * r));
+      segments.push(p);
+    }
+  }
+
+  function addSpiralDrop(steps, dropHeight, radius, turns) {
+    const start = segments.length ? segments[segments.length - 1].clone() : new THREE.Vector3(0, 60, 0);
+    const center = start.clone().add(new THREE.Vector3(radius, 0, 0));
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const angle = f * turns * Math.PI * 2;
+      const y = start.y - f * dropHeight;
+      const x = center.x + Math.cos(angle) * radius * (1 - f * 0.2);
+      const z = start.z + Math.sin(angle) * radius * (1 - f * 0.2);
+      segments.push(new THREE.Vector3(x, y, z));
+    }
+  }
+
+  function addCorkscrew(origin, axis, radius, turns, length, steps) {
+    const perp1 = new THREE.Vector3(1, 0, 0);
+    if (Math.abs(axis.dot(perp1)) > 0.9) perp1.set(0, 0, 1);
+    perp1.cross(axis).normalize();
+    const perp2 = new THREE.Vector3().crossVectors(axis, perp1).normalize();
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const angle = f * turns * Math.PI * 2;
+      const along = axis.clone().multiplyScalar(f * length);
+      const r = radius * (1 + 0.3 * Math.sin(f * Math.PI * 4));
+      const cx = perp1.clone().multiplyScalar(Math.cos(angle) * r);
+      const cy = perp2.clone().multiplyScalar(Math.sin(angle) * r);
+      segments.push(origin.clone().add(along).add(cx).add(cy));
+    }
+  }
+
+  function addStraightWithSine(start, direction, length, ampX, freqX, ampY, freqY, ampZ, freqZ, steps) {
+    const d = direction.clone().normalize();
+    const perp1 = new THREE.Vector3().crossVectors(d, new THREE.Vector3(0, 1, 0));
+    if (perp1.length() < 0.01) perp1.set(1, 0, 0);
+    else perp1.normalize();
+    const perp2 = new THREE.Vector3().crossVectors(d, perp1).normalize();
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const along = d.clone().multiplyScalar(f * length);
+      const wobble = perp1.clone().multiplyScalar(Math.sin(f * freqX * Math.PI * 2) * ampX)
+        .add(new THREE.Vector3(0, Math.sin(f * freqY * Math.PI * 2) * ampY, 0))
+        .add(perp2.clone().multiplyScalar(Math.sin(f * freqZ * Math.PI * 2) * ampZ));
+      segments.push(start.clone().add(along).add(wobble));
+    }
+  }
+
+  // --- BUILD THE TRACK SEGMENTS ---
+
+  // 1. Launch straight with gentle wavy hills
+  addStraightWithSine(
+    new THREE.Vector3(-250, 15, 0),
+    new THREE.Vector3(1, 0, 0.05),
+    280, 20, 2, 30, 3, 12, 1.5, 100
+  );
+
+  // 2. Sweeping left-turn helix up (big radius)
+  addHelix(
+    segments[segments.length - 1].clone().add(new THREE.Vector3(0, 0, 60)),
+    new THREE.Vector3(0, 1, 0.1),
+    70, 1, 45, 150, 1
+  );
+
+  // 3. Gentle spiral drop
+  addSpiralDrop(150, 35, 50, 2);
+
+  // 4. Zigzag section — wide alternating turns
+  for (let z = 0; z < 4; z++) {
+    const sign = z % 2 === 0 ? 1 : -1;
+    addStraightWithSine(
+      segments[segments.length - 1].clone(),
+      new THREE.Vector3(sign, 0.05, 0.4 * sign).normalize(),
+      120, 8, 1.5, 20, 2, 8, 1, 60
+    );
+  }
+
+  // 5. Big vertical loop
+  const loopCenter = segments[segments.length - 1].clone().add(new THREE.Vector3(0, 30, 0));
+  const loopAxis = new THREE.Vector3(0, 0, 1);
+  addCorkscrew(loopCenter.clone(), loopAxis, 35, 1, 15, 180);
+
+  // 6. Right-turn helix DOWN (gentle)
+  addHelix(
+    segments[segments.length - 1].clone().add(new THREE.Vector3(0, 0, -50)),
+    new THREE.Vector3(0, -1, -0.15),
+    60, 1, -30, 120, -1
+  );
+
+  // 7. S-bend serpentine (wide)
+  for (let s = 0; s < 3; s++) {
+    const sign = s % 2 === 0 ? 1 : -1;
+    addStraightWithSine(
+      segments[segments.length - 1].clone(),
+      new THREE.Vector3(0.2, 0, sign).normalize(),
+      150, 40, 0.7, 12, 1.5, 20, 1, 80
+    );
+  }
+
+  // 8. Double corkscrew (wide)
+  const csStart = segments[segments.length - 1].clone();
+  addCorkscrew(csStart, new THREE.Vector3(1, 0.2, 0.15).normalize(), 30, 1.5, 180, 200);
+
+  // 9. Bunny hops (gentle)
+  for (let h = 0; h < 5; h++) {
+    addStraightWithSine(
+      segments[segments.length - 1].clone(),
+      new THREE.Vector3(0.7, 0, -0.4).normalize(),
+      60, 5, 1, 18, 0.5, 5, 1, 30
+    );
+  }
+
+  // 10. Final sweeping curve back toward start
+  addHelix(
+    new THREE.Vector3(0, 30, 0),
+    new THREE.Vector3(0, 1, 0),
+    200, 0.5, -5, 120, -1
+  );
+
+  // Close the loop smoothly back to the beginning
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  for (let i = 0; i < 30; i++) {
+    const f = (i + 1) / 30;
+    segments.push(lerp3(last, first, f));
+  }
+
+  // Clamp minimum height so track never goes below ground
+  const minY = 8;
+  for (const p of segments) {
+    if (p.y < minY) p.y = minY;
+  }
+
+  // Resample and re-clamp to prevent interpolation dips
+  const curve = new THREE.CatmullRomCurve3(segments, true);
+  const resampled = [];
+  const sampleCount = 2000;
+  for (let i = 0; i < sampleCount; i++) {
+    const p = curve.getPointAt(i / sampleCount);
+    if (p.y < minY) p.y = minY;
+    resampled.push(p);
+  }
+
+  return new THREE.CatmullRomCurve3(resampled, true);
+}
+
+const trackCurve = generateTrack();
+
+// --- TRACK RAIL TUBE ---
+const trackGeo = new THREE.TubeGeometry(trackCurve, 1200, 1.2, 8, true);
+const trackMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+  },
+  vertexShader: `
+    varying vec3 vPos;
+    varying vec2 vUv;
+    void main() {
+      vPos = position;
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    varying vec3 vPos;
+    varying vec2 vUv;
+    void main() {
+      float stripe = sin(vUv.x * 200.0 + uTime * 5.0) * 0.5 + 0.5;
+      float pulse = sin(vUv.x * 40.0 - uTime * 3.0) * 0.5 + 0.5;
+      vec3 cyan = vec3(0.0, 1.0, 1.0);
+      vec3 magenta = vec3(1.0, 0.0, 1.0);
+      vec3 orange = vec3(1.0, 0.5, 0.0);
+      vec3 col = mix(cyan, magenta, stripe);
+      col = mix(col, orange, pulse * 0.3);
+      float glow = pow(stripe, 3.0) * 1.5;
+      col += glow * vec3(0.2, 0.8, 1.0);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+});
+const trackMesh = new THREE.Mesh(trackGeo, trackMat);
+scene.add(trackMesh);
+
+// --- SUPPORT STRUCTURES ---
+function createSupport(p1, p2, color) {
+  const dir = new THREE.Vector3().subVectors(p2, p1);
+  const len = dir.length();
+  const geo = new THREE.CylinderGeometry(0.15, 0.25, len, 6);
+  const mat = new THREE.MeshBasicMaterial({ color });
+  const mesh = new THREE.Mesh(geo, mat);
+  const mid = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5);
+  mesh.position.copy(mid);
+  mesh.lookAt(p2);
+  mesh.rotateX(Math.PI / 2);
+  scene.add(mesh);
+}
+
+for (let i = 0; i < 200; i++) {
+  const t = i / 200;
+  const p = trackCurve.getPointAt(t);
+  const ground = new THREE.Vector3(p.x, 0, p.z);
+  if (p.y > 3) createSupport(p, ground, [0xff00ff, 0x00ffff, 0xff6600][i % 3]);
+}
+
+// --- GROUND SHADER ---
+const groundShader = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    varying vec3 vPos;
+    void main() {
+      vUv = uv;
+      vPos = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    varying vec2 vUv;
+    varying vec3 vPos;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        f.y
+      );
+    }
+
+    void main() {
+      vec2 uv = vPos.xz * 0.008;
+
+      // Animated grid
+      float grid = smoothstep(0.02, 0.0, abs(fract(uv.x * 10.0) - 0.5) - 0.48)
+                  + smoothstep(0.02, 0.0, abs(fract(uv.y * 10.0) - 0.5) - 0.48);
+      grid = clamp(grid, 0.0, 1.0);
+
+      // Flowing energy lines
+      float flow = sin(uv.x * 30.0 + uTime * 2.0) * sin(uv.y * 30.0 - uTime * 1.5);
+      flow = smoothstep(0.95, 1.0, flow);
+
+      float n = noise(uv * 5.0 + uTime * 0.3);
+
+      vec3 baseCol = vec3(0.01, 0.0, 0.03);
+      vec3 gridCol = vec3(0.0, 0.5, 1.0) * (0.3 + 0.2 * sin(uTime));
+      vec3 flowCol = vec3(1.0, 0.0, 0.8);
+      vec3 noiseCol = vec3(0.1, 0.0, 0.2) * n;
+
+      vec3 col = baseCol + gridCol * grid * 0.5 + flowCol * flow * 0.6 + noiseCol;
+
+      // Distance fade
+      float dist = length(vPos.xz) * 0.003;
+      col *= exp(-dist * 0.5);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+});
+const groundGeo = new THREE.PlaneGeometry(2000, 2000, 1, 1);
+groundGeo.rotateX(-Math.PI / 2);
+const ground = new THREE.Mesh(groundGeo, groundShader);
+scene.add(ground);
+
+// --- NEON STRUCTURES ---
+const structures = [];
+const structureGroup = new THREE.Group();
+scene.add(structureGroup);
+
+const buildingShader = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uColor: { value: new THREE.Color(1, 0, 1) },
+  },
+  vertexShader: `
+    varying vec3 vPos;
+    varying vec3 vNorm;
+    void main() {
+      vPos = position;
+      vNorm = normal;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    uniform vec3 uColor;
+    varying vec3 vPos;
+    varying vec3 vNorm;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453123);
+    }
+
+    void main() {
+      // Window grid pattern
+      vec2 win = fract(vPos.xz * 0.5 + vPos.y * 0.3);
+      float window = step(0.3, win.x) * step(win.x, 0.7) * step(0.3, win.y) * step(win.y, 0.7);
+
+      float flicker = step(0.7, hash(floor(vPos.xz * 0.5 + vPos.y * 0.3)));
+      window *= flicker;
+
+      float edge = 1.0 - abs(dot(vNorm, vec3(0.0, 0.0, 1.0)));
+      edge = pow(edge, 2.0);
+
+      float scan = sin(vPos.y * 5.0 - uTime * 3.0) * 0.5 + 0.5;
+
+      vec3 col = uColor * 0.05;
+      col += uColor * window * 0.8;
+      col += uColor * edge * 1.5;
+      col += uColor * scan * 0.2;
+
+      float glow = sin(uTime * 2.0 + vPos.y) * 0.3 + 0.7;
+      col *= glow;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+  transparent: true,
+});
+
+function createStructure(pos) {
+  const type = Math.random();
+  let geo;
+  let floatHeight = 0;
+
+  if (type < 0.3) {
+    // Tower — big
+    const h = 30 + Math.random() * 80;
+    geo = new THREE.BoxGeometry(6 + Math.random() * 10, h, 6 + Math.random() * 10);
+  } else if (type < 0.6) {
+    // Cylinder — big
+    const h = 20 + Math.random() * 60;
+    geo = new THREE.CylinderGeometry(4, 6 + Math.random() * 6, h, 6 + Math.floor(Math.random() * 4));
+  } else if (type < 0.8) {
+    // Torus — big, floats
+    geo = new THREE.TorusGeometry(12 + Math.random() * 18, 1 + Math.random() * 3, 8, 16);
+    floatHeight = 15 + Math.random() * 40;
+  } else {
+    // Icosahedron — big, floats
+    geo = new THREE.IcosahedronGeometry(8 + Math.random() * 14, 0);
+    floatHeight = 15 + Math.random() * 40;
+  }
+
+  const colors = [
+    [1, 0, 1], [0, 1, 1], [1, 0.3, 0], [0.3, 0, 1], [1, 0, 0.3],
+    [0, 1, 0.5], [0.5, 0, 1], [1, 0.5, 0], [0, 0.5, 1], [1, 1, 0],
+  ];
+  const col = colors[Math.floor(Math.random() * colors.length)];
+
+  const mat = buildingShader.clone();
+  mat.uniforms.uColor.value.setRGB(col[0], col[1], col[2]);
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(pos);
+
+  if (floatHeight > 0) {
+    mesh.position.y = floatHeight;
+  } else {
+    const h = geo.parameters.height || geo.parameters.radiusTop * 2 || 10;
+    mesh.position.y = h / 2;
+  }
+
+  // Final 3D collision check at actual position
+  const radius = geo.parameters.radius || geo.parameters.width / 2 || geo.parameters.radiusTop * 2 || 5;
+  if (isNearTrack(mesh.position, radius + 8)) {
+    geo.dispose();
+    mat.dispose();
+    return;
+  }
+
+  mesh.rotation.y = Math.random() * Math.PI * 2;
+  structureGroup.add(mesh);
+  structures.push({ mesh, rotSpeed: (Math.random() - 0.5) * 0.01, bobSpeed: Math.random() * 2, bobAmp: Math.random() * 0.5, baseY: mesh.position.y });
+}
+
+// Pre-sample track for collision checks
+const trackSamples = [];
+for (let i = 0; i < 2000; i++) {
+  trackSamples.push(trackCurve.getPointAt(i / 2000));
+}
+
+function isNearTrack(pos, minDist) {
+  for (let i = 0; i < trackSamples.length; i += 10) {
+    const dx = pos.x - trackSamples[i].x;
+    const dy = pos.y - trackSamples[i].y;
+    const dz = pos.z - trackSamples[i].z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < minDist * minDist) return true;
+  }
+  return false;
+}
+
+let placed = 0;
+let attempts = 0;
+while (placed < 300 && attempts < 2000) {
+  attempts++;
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 80 + Math.random() * 600;
+  const x = Math.cos(angle) * dist;
+  const z = Math.sin(angle) * dist;
+  const candidate = new THREE.Vector3(x, 0, z);
+  if (isNearTrack(candidate, 20)) continue;
+  createStructure(candidate);
+  placed++;
+}
+
+// --- STARFIELD ---
+const starGeo = new THREE.BufferGeometry();
+const starCount = 5000;
+const starPos = new Float32Array(starCount * 3);
+const starSizes = new Float32Array(starCount);
+for (let i = 0; i < starCount; i++) {
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  const r = 500 + Math.random() * 500;
+  starPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+  starPos[i * 3 + 1] = Math.abs(r * Math.cos(phi));
+  starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+  starSizes[i] = 0.5 + Math.random() * 2.5;
+}
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
+
+const starMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 } },
+  vertexShader: `
+    attribute float size;
+    varying float vSize;
+    uniform float uTime;
+    void main() {
+      vSize = size;
+      vec4 mvp = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = size * (300.0 / -mvp.z);
+      gl_Position = projectionMatrix * mvp;
+    }
+  `,
+  fragmentShader: `
+    varying float vSize;
+    uniform float uTime;
+    void main() {
+      float d = length(gl_PointCoord - 0.5) * 2.0;
+      float alpha = 1.0 - smoothstep(0.0, 1.0, d);
+      float twinkle = sin(uTime * 3.0 + vSize * 10.0) * 0.3 + 0.7;
+      vec3 col = mix(vec3(0.8, 0.9, 1.0), vec3(1.0, 0.7, 1.0), vSize / 3.0);
+      gl_FragColor = vec4(col * twinkle, alpha * twinkle);
+    }
+  `,
+  transparent: true,
+  depthWrite: false,
+});
+scene.add(new THREE.Points(starGeo, starMat));
+
+// --- FLOATING ORBS ---
+const orbGroup = new THREE.Group();
+scene.add(orbGroup);
+const orbs = [];
+let orbPlaced = 0;
+let orbAttempts = 0;
+while (orbPlaced < 60 && orbAttempts < 500) {
+  orbAttempts++;
+  const geo = new THREE.SphereGeometry(1 + Math.random() * 2, 8, 8);
+  const col = new THREE.Color().setHSL(Math.random(), 1, 0.6);
+  const mat = new THREE.MeshBasicMaterial({ color: col });
+  const mesh = new THREE.Mesh(geo, mat);
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 60 + Math.random() * 300;
+  const oy = 5 + Math.random() * 50;
+  mesh.position.set(Math.cos(angle) * dist, oy, Math.sin(angle) * dist);
+
+  if (isNearTrack(mesh.position, 12)) {
+    geo.dispose();
+    mat.dispose();
+    continue;
+  }
+
+  // Add glow sprite
+  const spriteMat = new THREE.SpriteMaterial({
+    color: col,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending,
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(10, 10, 1);
+  mesh.add(sprite);
+
+  orbGroup.add(mesh);
+  orbs.push({ mesh, speed: 0.5 + Math.random() * 2, offset: Math.random() * Math.PI * 2, dist, angle });
+  orbPlaced++;
+}
+
+// --- NEON LIGHTS ---
+const colors = [0xff00ff, 0x00ffff, 0xff6600, 0x6600ff, 0xff0066, 0x00ff66];
+for (let i = 0; i < 30; i++) {
+  const t = i / 30;
+  const p = trackCurve.getPointAt(t);
+  const light = new THREE.PointLight(colors[i % colors.length], 80, 120);
+  light.position.copy(p).add(new THREE.Vector3(0, 5, 0));
+  scene.add(light);
+}
+
+// Ambient
+scene.add(new THREE.AmbientLight(0x110022, 0.5));
+
+// --- CARS ON THE TRACK ---
+const cars = [];
+const carColors = [0xff0044, 0x00ff88, 0xffaa00, 0x0088ff, 0xff44ff, 0xffff00, 0x44ffcc, 0xff6600];
+for (let i = 0; i < 12; i++) {
+  const carGroup = new THREE.Group();
+
+  // Body
+  const bodyGeo = new THREE.BoxGeometry(1.8, 0.7, 3.2);
+  const bodyCol = carColors[i % carColors.length];
+  const bodyMat = new THREE.MeshStandardMaterial({ color: bodyCol, emissive: bodyCol, emissiveIntensity: 0.4, metalness: 0.6, roughness: 0.3 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.5;
+  carGroup.add(body);
+
+  // Cabin
+  const cabinGeo = new THREE.BoxGeometry(1.4, 0.55, 1.6);
+  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111122, emissive: 0x220044, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.2 });
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0, 1.05, -0.3);
+  carGroup.add(cabin);
+
+  // Headlights
+  for (const side of [-0.6, 0.6]) {
+    const hlGeo = new THREE.SphereGeometry(0.15, 6, 6);
+    const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
+    const hl = new THREE.Mesh(hlGeo, hlMat);
+    hl.position.set(side, 0.45, 1.65);
+    carGroup.add(hl);
+  }
+
+  // Taillights
+  for (const side of [-0.6, 0.6]) {
+    const tlGeo = new THREE.SphereGeometry(0.12, 6, 6);
+    const tlMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const tl = new THREE.Mesh(tlGeo, tlMat);
+    tl.position.set(side, 0.45, -1.65);
+    carGroup.add(tl);
+  }
+
+  // Underglow
+  const glowGeo = new THREE.BoxGeometry(2.0, 0.05, 3.4);
+  const glowMat = new THREE.MeshBasicMaterial({ color: bodyCol, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  glow.position.y = 0.1;
+  carGroup.add(glow);
+
+  // Point light under car
+  const underLight = new THREE.PointLight(bodyCol, 15, 15);
+  underLight.position.y = 0.2;
+  carGroup.add(underLight);
+
+  carGroup.scale.setScalar(0.8 + Math.random() * 0.4);
+  scene.add(carGroup);
+
+  cars.push({
+    mesh: carGroup,
+    t: Math.random(),
+    speed: 0.00004 + Math.random() * 0.00006,
+    lateralOffset: (Math.random() - 0.5) * 3,
+  });
+}
+
+// --- CAMERA PATH ---
+let t = 0;
+const cameraSpeed = 0.00008;
+let prevPos = trackCurve.getPointAt(0);
+const speedDisplay = document.getElementById('speed');
+const smoothQuat = new THREE.Quaternion();
+const smoothTarget = new THREE.Vector3();
+let firstFrame = true;
+
+// --- SHOCKWAVE / MOTION BLUR POST-STYLE ---
+const cometTrailGeo = new THREE.BufferGeometry();
+const trailPositions = new Float32Array(300 * 3);
+const trailColors = new Float32Array(300 * 3);
+cometTrailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+cometTrailGeo.setAttribute('color', new THREE.BufferAttribute(trailColors, 3));
+const trailMat = new THREE.PointsMaterial({
+  size: 2,
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.6,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+});
+const trail = new THREE.Points(cometTrailGeo, trailMat);
+scene.add(trail);
+const trailHistory = [];
+
+// --- NEBULA PLANES ---
+for (let i = 0; i < 15; i++) {
+  const nebGeo = new THREE.PlaneGeometry(150 + Math.random() * 200, 80 + Math.random() * 120);
+  const nebMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uSeed: { value: Math.random() * 100 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform float uSeed;
+      varying vec2 vUv;
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1 + uSeed, 311.7))) * 43758.5453); }
+      float noise(vec2 p) {
+        vec2 i = floor(p); vec2 f = fract(p);
+        f = f*f*(3.0-2.0*f);
+        return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+      }
+      float fbm(vec2 p) {
+        float v = 0.0, a = 0.5;
+        for(int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.0; a *= 0.5; }
+        return v;
+      }
+      void main() {
+        vec2 uv = vUv - 0.5;
+        float d = length(uv);
+        float n = fbm(vUv * 4.0 + uTime * 0.1);
+        float nebula = smoothstep(0.5, 0.0, d) * n;
+        vec3 c1 = vec3(0.2, 0.0, 0.5);
+        vec3 c2 = vec3(1.0, 0.0, 0.3);
+        vec3 c3 = vec3(0.0, 0.3, 1.0);
+        vec3 col = mix(c1, c2, n) * nebula;
+        col = mix(col, c3, sin(uTime * 0.5 + uSeed) * 0.5 + 0.5);
+        gl_FragColor = vec4(col, nebula * 0.3);
+      }
+    `,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const nebMesh = new THREE.Mesh(nebGeo, nebMat);
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 300 + Math.random() * 600;
+  const h = 120 + Math.random() * 250;
+  nebMesh.position.set(Math.cos(angle) * dist, h, Math.sin(angle) * dist);
+  nebMesh.lookAt(0, h, 0);
+  scene.add(nebMesh);
+  structures.push({ mesh: nebMesh, isNebula: true });
+}
+
+// --- ANIMATE ---
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const elapsed = clock.getElapsedTime();
+  const delta = clock.getDelta();
+
+  // Speed variation — faster downhill, slower climbing
+  const tangentRaw = trackCurve.getTangentAt(t);
+  const verticalAngle = Math.asin(Math.max(-1, Math.min(1, tangentRaw.y)));
+  const speedMult = 0.4 + Math.max(0, -verticalAngle) * 0.8 + Math.sin(elapsed * 0.5) * 0.08;
+  t = (t + cameraSpeed * speedMult) % 1;
+
+  const pos = trackCurve.getPointAt(t);
+  const lookT = (t + 0.012) % 1;
+  const lookAt = trackCurve.getPointAt(lookT);
+
+  const frames = trackCurve.computeFrenetFrames(2000, true);
+  const frameIndex = Math.floor(t * 2000) % 2000;
+  const lookFrameIndex = Math.floor(lookT * 2000) % 2000;
+
+  const tangent = frames.tangents[frameIndex];
+  const lookTangent = frames.tangents[lookFrameIndex];
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(tangent, worldUp).normalize();
+  const trueUp = new THREE.Vector3().crossVectors(right, tangent).normalize();
+
+  camera.position.copy(pos).addScaledVector(trueUp, 3.0).addScaledVector(tangent, -1.5);
+
+  const lookRight = new THREE.Vector3().crossVectors(lookTangent, worldUp).normalize();
+  const lookUp = new THREE.Vector3().crossVectors(lookRight, lookTangent).normalize();
+
+  const rawTarget = lookAt.clone().addScaledVector(lookUp, 3.0).addScaledVector(lookTangent, -1.5);
+  if (firstFrame) {
+    smoothTarget.copy(rawTarget);
+    firstFrame = false;
+  }
+  smoothTarget.lerp(rawTarget, 0.08);
+  camera.lookAt(smoothTarget);
+
+  // Camera tilt on turns — smoothed
+  const tanAhead = trackCurve.getTangentAt((t + 0.006) % 1);
+  const lateral = new THREE.Vector3().crossVectors(tangent, tanAhead);
+  const turnDir = lateral.y;
+  const rawTilt = Math.max(-0.18, Math.min(0.18, -turnDir * 5));
+  const curTilt = camera.rotation.z;
+  camera.rotation.z = curTilt + (rawTilt - curTilt) * 0.06;
+
+  // Speed display
+  const speed = Math.round(15 + speedMult * 50);
+  speedDisplay.textContent = speed + ' km/h';
+
+  // Update uniforms
+  trackMat.uniforms.uTime.value = elapsed;
+  groundShader.uniforms.uTime.value = elapsed;
+  starMat.uniforms.uTime.value = elapsed;
+
+  structures.forEach(s => {
+    if (s.isNebula) {
+      s.mesh.material.uniforms.uTime.value = elapsed;
+      s.mesh.rotation.z += 0.0003;
+    } else if (s.mesh) {
+      s.mesh.material.uniforms.uTime.value = elapsed;
+      s.mesh.rotation.y += s.rotSpeed;
+      if (s.bobAmp) {
+        s.mesh.position.y = s.baseY + Math.sin(elapsed * s.bobSpeed + s.offset || 0) * s.bobAmp;
+      }
+    }
+  });
+
+  // Animate orbs
+  orbs.forEach(o => {
+    o.angle += 0.002 * o.speed;
+    o.mesh.position.x = Math.cos(o.angle) * o.dist;
+    o.mesh.position.z = Math.sin(o.angle) * o.dist;
+    o.mesh.position.y = 10 + Math.sin(elapsed * o.speed + o.offset) * 8;
+    o.mesh.scale.setScalar(0.8 + Math.sin(elapsed * 3 + o.offset) * 0.3);
+  });
+
+  // Animate cars along the track
+  cars.forEach(car => {
+    car.t = (car.t + car.speed * speedMult) % 1;
+    const carPos = trackCurve.getPointAt(car.t);
+    const carAhead = trackCurve.getPointAt((car.t + 0.003) % 1);
+    const tangent = new THREE.Vector3().subVectors(carAhead, carPos).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(tangent, up).normalize();
+    const offset = right.clone().multiplyScalar(car.lateralOffset);
+    const finalPos = carPos.clone().add(offset);
+    finalPos.y += 0.5;
+    car.mesh.position.copy(finalPos);
+    const lookTarget = carAhead.clone().add(offset);
+    lookTarget.y += 0.5;
+    car.mesh.lookAt(lookTarget);
+  });
+
+  // Trail
+  trailHistory.unshift(pos.clone());
+  if (trailHistory.length > 300) trailHistory.pop();
+  const tPos = cometTrailGeo.attributes.position.array;
+  const tCol = cometTrailGeo.attributes.color.array;
+  for (let i = 0; i < 300; i++) {
+    if (i < trailHistory.length) {
+      tPos[i * 3] = trailHistory[i].x;
+      tPos[i * 3 + 1] = trailHistory[i].y + 1.5;
+      tPos[i * 3 + 2] = trailHistory[i].z;
+    }
+    const fade = 1 - i / 300;
+    const hue = (elapsed * 0.2 + i * 0.005) % 1;
+    const c = new THREE.Color().setHSL(hue, 1, 0.5 * fade);
+    tCol[i * 3] = c.r;
+    tCol[i * 3 + 1] = c.g;
+    tCol[i * 3 + 2] = c.b;
+  }
+  cometTrailGeo.attributes.position.needsUpdate = true;
+  cometTrailGeo.attributes.color.needsUpdate = true;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
