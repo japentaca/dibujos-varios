@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="description" content="Penetrator 3D - Clon del clásico juego de ZX Spectrum (1982) creado con Three.js" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Penetrator 3D — ZX Spectrum Tribute</title>
+  <style>
+    /* =============================================
+       ESTILOS GLOBALES — Estética retro neón/CRT
+       ============================================= */
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      color: #00ff41;
+      touch-action: none; /* deshabilitar scroll táctil para el juego */
+    }
+
+    /* Contenedor del canvas Three.js */
+    #game-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* =============================================
+       EFECTOS CRT mejorados (Fase 8)
+       ============================================= */
+
+    /* Líneas de escaneo CRT */
+    #scanlines {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.12) 2px,
+        rgba(0, 0, 0, 0.12) 4px
+      );
+      animation: crtFlicker 8s infinite;
+    }
+
+    @keyframes crtFlicker {
+      0%,  2%,  4%,  100% { opacity: 1; }
+      1%,  3%            { opacity: 0.92; }
+      50%                { opacity: 0.98; }
+    }
+
+    /* Viñeta CRT */
+    #crt-vignette {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 11;
+      background: radial-gradient(
+        ellipse at center,
+        transparent 55%,
+        rgba(0, 0, 0, 0.75) 100%
+      );
+    }
+
+    /* Curvatura CRT sutil via perspectiva */
+    #game-container canvas {
+      filter: contrast(1.05) brightness(1.02);
+    }
+
+    /* =============================================
+       PANTALLA DE CARGA
+       ============================================= */
+    #loading-screen {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      transition: opacity 0.8s ease-out;
+    }
+
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #loading-screen h1 {
+      font-size: clamp(1rem, 4vw, 2rem);
+      color: #00ff41;
+      text-shadow: 0 0 20px #00ff41, 0 0 40px #00ff41;
+      margin-bottom: 2rem;
+      animation: flicker 1.5s infinite alternate;
+    }
+
+    #loading-screen p {
+      font-size: clamp(0.5rem, 2vw, 0.7rem);
+      color: #00ff41;
+      opacity: 0.7;
+      animation: blink 1s infinite;
+    }
+
+    /* Barra de progreso decorativa */
+    #loading-bar-wrap {
+      width: clamp(200px, 50vw, 400px);
+      height: 6px;
+      background: #001a00;
+      border: 1px solid #00ff41;
+      margin-top: 2rem;
+      overflow: hidden;
+    }
+
+    #loading-bar {
+      height: 100%;
+      background: #00ff41;
+      box-shadow: 0 0 8px #00ff41;
+      animation: loadProgress 1.4s ease-out forwards;
+    }
+
+    @keyframes loadProgress {
+      from { width: 0%; }
+      to   { width: 100%; }
+    }
+
+    @keyframes flicker {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.85; }
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0; }
+    }
+
+    /* =============================================
+       HUD Y MENÚ
+       ============================================= */
+    #ui-layer {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #hud-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: clamp(0.5rem, 2vw, 1.5rem) clamp(0.5rem, 3vw, 2rem);
+      font-size: clamp(0.5rem, 2vw, 1rem);
+      text-shadow: 0 0 10px #00ff41;
+    }
+
+    /* Botón Fullscreen en el HUD */
+    #btn-fullscreen {
+      pointer-events: auto;
+      background: transparent;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      font-family: inherit;
+      font-size: clamp(0.6rem, 2vw, 1rem);
+      padding: 0.3rem 0.6rem;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.2s, box-shadow 0.2s;
+    }
+
+    #btn-fullscreen:hover {
+      opacity: 1;
+      box-shadow: 0 0 8px #00ff41;
+    }
+
+    #ui-menu {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      background: rgba(0, 20, 0, 0.9);
+      padding: clamp(1.5rem, 5vw, 3rem);
+      border: 2px solid #00ff41;
+      box-shadow: 0 0 30px #00ff41, inset 0 0 20px rgba(0,255,65,0.1);
+      pointer-events: auto;
+      min-width: clamp(200px, 50vw, 500px);
+    }
+
+    #ui-menu.hidden {
+      display: none;
+    }
+
+    #ui-menu h2 {
+      font-size: clamp(1rem, 5vw, 2.5rem);
+      margin-bottom: 2rem;
+      text-shadow: 0 0 15px #00ff41, 0 0 30px #00ff41;
+      animation: flicker 2s infinite alternate;
+    }
+
+    #ui-menu p {
+      font-size: clamp(0.5rem, 2vw, 1rem);
+      line-height: 1.8;
+      white-space: pre-line;
+      animation: blink 1s infinite;
+    }
+
+    /* Teclas de ayuda en menú inicio */
+    #menu-hints {
+      margin-top: 1.5rem;
+      font-size: clamp(0.4rem, 1.5vw, 0.65rem);
+      color: #00cc33;
+      opacity: 0.8;
+      line-height: 2;
+      animation: none;
+      white-space: pre-line;
+    }
+
+    /* =============================================
+       PANTALLA DE PAUSA (Fase 8)
+       ============================================= */
+    #ui-pause {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 55;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    #ui-pause.hidden {
+      display: none;
+    }
+
+    #ui-pause-box {
+      text-align: center;
+      border: 2px solid #00ff41;
+      background: rgba(0, 20, 0, 0.92);
+      padding: 2.5rem 3.5rem;
+      box-shadow: 0 0 40px #00ff41, inset 0 0 20px rgba(0,255,65,0.08);
+      animation: pausePulse 2s infinite alternate;
+    }
+
+    @keyframes pausePulse {
+      from { box-shadow: 0 0 20px #00ff41, inset 0 0 10px rgba(0,255,65,0.08); }
+      to   { box-shadow: 0 0 50px #00ff41, inset 0 0 20px rgba(0,255,65,0.15); }
+    }
+
+    #ui-pause-box h2 {
+      font-size: clamp(1.5rem, 6vw, 3rem);
+      text-shadow: 0 0 20px #00ff41;
+      animation: flicker 3s infinite alternate;
+    }
+
+    #ui-pause-box p {
+      margin-top: 1.5rem;
+      font-size: clamp(0.5rem, 2vw, 0.8rem);
+      color: #00cc33;
+      animation: blink 1.5s infinite;
+    }
+
+    /* =============================================
+       EDITOR DE NIVELES (Fase 7 — sin cambios)
+       ============================================= */
+    #editor-layer {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 60;
+    }
+
+    #editor-layer:not(.hidden) {
+      pointer-events: auto;
+    }
+
+    #editor-sidebar {
+      position: absolute;
+      right: 0; top: 0;
+      width: 250px; height: 100%;
+      background: rgba(0, 30, 0, 0.9);
+      border-left: 2px solid #00ff41;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      transition: transform 0.3s ease;
+    }
+
+    #editor-layer.hidden {
+      display: none;
+    }
+
+    #editor-sidebar h3 {
+      font-size: 1.5rem;
+      text-align: center;
+      margin-bottom: 0.5rem;
+      text-shadow: 0 0 10px #00ff41;
+    }
+
+    #editor-sidebar p {
+      font-size: 0.7rem;
+      color: #00cc33;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .editor-tool {
+      background: #002200;
+      border: 1px dashed #00ff41;
+      color: #00ff41;
+      padding: 1rem;
+      text-align: center;
+      cursor: grab;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+
+    .editor-tool:hover   { background: #004400; }
+    .editor-tool:active  { cursor: grabbing; }
+
+    .editor-buttons {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .editor-buttons button {
+      background: transparent;
+      border: 2px solid #00ff41;
+      color: #00ff41;
+      font-family: inherit;
+      padding: 0.8rem;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+
+    .editor-buttons button:hover {
+      background: #00ff41;
+      color: #000;
+    }
+
+    /* =============================================
+       CONTROLES TÁCTILES (Fase 8)
+       ============================================= */
+    #touch-controls {
+      display: none; /* Visible solo si pointer:coarse */
+      position: fixed;
+      bottom: 0; left: 0;
+      width: 100%; height: 45vmin;
+      z-index: 70;
+      pointer-events: none;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 0 4vmin 4vmin;
+    }
+
+    /* Joystick lado izquierdo */
+    #joystick-base {
+      pointer-events: auto;
+      width: 22vmin;
+      height: 22vmin;
+      border-radius: 50%;
+      background: rgba(0, 255, 65, 0.08);
+      border: 2px solid rgba(0, 255, 65, 0.4);
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+      touch-action: none;
+    }
+
+    #joystick-knob {
+      width: 10vmin;
+      height: 10vmin;
+      border-radius: 50%;
+      background: rgba(0, 255, 65, 0.25);
+      border: 2px solid #00ff41;
+      box-shadow: 0 0 10px #00ff41;
+      transition: transform 0s; /* Sin transición para respuesta inmediata */
+    }
+
+    /* Botones lado derecho (FIRE y BOMB) */
+    #touch-action-buttons {
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3vmin;
+      align-items: flex-end;
+    }
+
+    .touch-btn {
+      width: 18vmin;
+      height: 18vmin;
+      border-radius: 50%;
+      border: 2px solid #00ff41;
+      font-family: 'Press Start 2P', monospace;
+      font-size: clamp(0.5rem, 2.5vmin, 0.9rem);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s, box-shadow 0.1s;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #btn-touch-fire {
+      background: rgba(0, 200, 50, 0.2);
+      color: #00ff41;
+      box-shadow: 0 0 12px rgba(0, 255, 65, 0.3);
+    }
+
+    #btn-touch-fire:active {
+      background: rgba(0, 255, 65, 0.4);
+      transform: scale(0.92);
+      box-shadow: 0 0 20px #00ff41;
+    }
+
+    #btn-touch-bomb {
+      background: rgba(255, 150, 0, 0.15);
+      color: #ffaa00;
+      border-color: #ffaa00;
+      box-shadow: 0 0 12px rgba(255, 150, 0, 0.2);
+    }
+
+    #btn-touch-bomb:active {
+      background: rgba(255, 150, 0, 0.35);
+      transform: scale(0.92);
+      box-shadow: 0 0 20px #ffaa00;
+    }
+  </style>
+</head>
+<body>
+  <!-- Contenedor principal del juego -->
+  <div id="game-container"></div>
+
+  <!-- Efectos CRT -->
+  <div id="scanlines"></div>
+  <div id="crt-vignette"></div>
+
+  <!-- Pantalla de carga mejorada (Fase 8) -->
+  <div id="loading-screen">
+    <h1>PENETRATOR 3D</h1>
+    <p>CARGANDO...</p>
+    <div id="loading-bar-wrap">
+      <div id="loading-bar"></div>
+    </div>
+  </div>
+
+  <!-- Capa UI -->
+  <div id="ui-layer">
+    <div id="hud-top" class="hidden">
+      <div id="ui-score">SCORE: 000000</div>
+      <button id="btn-fullscreen" title="Pantalla completa (F)">⛶</button>
+      <div id="ui-lives">LIVES: ♥ ♥ ♥</div>
+    </div>
+
+    <div id="ui-menu">
+      <h2 id="ui-menu-title">PENETRATOR 3D</h2>
+      <p id="ui-menu-subtitle">PRESS ENTER TO START</p>
+      <p id="menu-hints">WASD / Flechas — Mover
+SPACE — Misil  |  CTRL — Bomba
+P / ESC — Pausa  |  F — Pantalla Completa</p>
+      <br>
+      <button id="btn-enter-editor" style="margin-top:20px; background:transparent; border: 2px solid #00ff41; color:#00ff41; font-family:inherit; padding: 10px 20px; cursor: pointer; font-size: 0.7rem;">LEVEL EDITOR</button>
+    </div>
+  </div>
+
+  <!-- Pantalla de PAUSA (Fase 8) -->
+  <div id="ui-pause" class="hidden">
+    <div id="ui-pause-box">
+      <h2>– PAUSA –</h2>
+      <p>PULSA P o ESC PARA CONTINUAR</p>
+    </div>
+  </div>
+
+  <!-- Capa Editor -->
+  <div id="editor-layer" class="hidden">
+    <div id="editor-sidebar">
+      <h3>EDITOR</h3>
+      <p>Mueve la cámara con A/D<br>Arrastra los items a la pantalla.</p>
+
+      <div class="editor-tool" id="tool-radar" draggable="true" data-type="RADAR">
+        RADAR
+      </div>
+      <div class="editor-tool" id="tool-missile" draggable="true" data-type="MISSILE">
+        MISSILE
+      </div>
+
+      <div class="editor-buttons">
+        <button id="btn-save-level">SAVE LEVEL</button>
+        <button id="btn-load-level">LOAD LEVEL</button>
+        <button id="btn-exit-editor">EXIT EDITOR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controles Táctiles (Fase 8 — solo móvil) -->
+  <div id="touch-controls">
+    <div id="joystick-base">
+      <div id="joystick-knob"></div>
+    </div>
+    <div id="touch-action-buttons">
+      <button class="touch-btn" id="btn-touch-fire">FIRE</button>
+      <button class="touch-btn" id="btn-touch-bomb">BOMB</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
