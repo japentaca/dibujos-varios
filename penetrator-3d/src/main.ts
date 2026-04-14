@@ -612,7 +612,8 @@ function gameLoop(): void {
   explosionManager.update(delta);
 
   // Actualizar enemigos y colisiones
-  enemyManager.update(delta, player.getPosition().x);
+  const playerPos = player.getPosition();
+  enemyManager.update(delta, playerPos.x, playerPos.y);
   collisionManager.update();
 
   // Efectos de fondo

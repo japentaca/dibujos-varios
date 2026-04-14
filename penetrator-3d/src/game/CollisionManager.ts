@@ -8,7 +8,7 @@
  */
 
 import * as THREE from 'three';
-import { EnemyManager } from './Enemy';
+import { EnemyManager, EnemyType } from './Enemy';
 import type { EnemyData } from './Enemy';
 import { ProjectileManager } from './Projectile';
 import { Player } from './Player';
@@ -35,6 +35,24 @@ export class CollisionManager {
     this.explosionManager = explosionManager;
   }
 
+  private getEnemyCollisionCenterY(enemy: EnemyData): number {
+    if (enemy.type === EnemyType.MISSILE) {
+      // El mesh del misil está anclado al suelo y su cuerpo va hacia arriba.
+      // Desplazamos el centro de colisión para que coincida con su silueta visual.
+      return enemy.mesh.position.y + 0.8;
+    }
+
+    return enemy.mesh.position.y;
+  }
+
+  private getEnemyCollisionRadius(enemy: EnemyData): number {
+    if (enemy.type === EnemyType.MISSILE) {
+      return 1.0;
+    }
+
+    return enemy.radius;
+  }
+
   public update(): void {
     const enemies = this.enemyManager.getActiveEnemies();
     const projectiles = this.projectileManager.getActiveProjectiles();
@@ -48,10 +66,13 @@ export class CollisionManager {
         const enemy = enemies[j];
         if (!enemy.active) continue;
 
-        // Distancia sencilla (círculos)
-        const dist = proj.mesh.position.distanceTo(enemy.mesh.position);
+        const enemyCenterY = this.getEnemyCollisionCenterY(enemy);
+        const enemyRadius = this.getEnemyCollisionRadius(enemy);
+        const dx = proj.mesh.position.x - enemy.mesh.position.x;
+        const dy = proj.mesh.position.y - enemyCenterY;
+        const dist = Math.hypot(dx, dy);
         
-        if (dist < enemy.radius + 0.3) {
+        if (dist < enemyRadius + 0.3) {
           // Colisión!
           // Destruir proyectil
           this.projectileManager.destroyProjectile(proj);
@@ -81,8 +102,13 @@ export class CollisionManager {
         const enemy = enemies[j];
         if (!enemy.active) continue;
 
-        const dist = playerPos.distanceTo(enemy.mesh.position);
-        if (dist < enemy.radius + playerRadius) {
+        const enemyCenterY = this.getEnemyCollisionCenterY(enemy);
+        const enemyRadius = this.getEnemyCollisionRadius(enemy);
+        const dx = playerPos.x - enemy.mesh.position.x;
+        const dy = playerPos.y - enemyCenterY;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < enemyRadius + playerRadius) {
           // Destruir enemigo (opcional, para que no vuelva a matar)
           this.enemyManager.destroyEnemy(enemy);
           this.explosionManager.spawn(enemy.mesh.position.clone(), ExplosionSize.SMALL);

@@ -19,11 +19,18 @@ color: #f0f; font-family: monospace; font-size: 28px;
 text-shadow: 0 0 15px #f0f, 0 0 30px #f0f;
 pointer-events: none;
 }
+#pause {
+position: fixed; top: 20px; left: 30px;
+color: #ff0; font-family: monospace; font-size: 20px;
+text-shadow: 0 0 10px #ff0, 0 0 20px #ff0;
+pointer-events: none; display: none;
+}
 </style>
 </head>
 <body>
 <div id="info">NIGHT ROLLERCOASTER FPV</div>
 <div id="speed"></div>
+<div id="pause">PAUSED</div>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js" } }
 </script>
@@ -45,11 +52,7 @@ const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerH
 
 // --- GENERATE ROLLERCOASTER TRACK ---
 function generateTrack() {
-  const points = [];
-  const N = 1200;
-
-  // Build a complex multi-featured track from segments
-  // Each segment type creates a different section of the ride
+  // Build a smoother multi-featured track from segments
   function lerp3(a, b, t) {
     return new THREE.Vector3(
       a.x + (b.x - a.x) * t,
@@ -58,23 +61,40 @@ function generateTrack() {
     );
   }
 
-  let cur = new THREE.Vector3(0, 20, 0);
-  let dir = new THREE.Vector3(1, 0, 0);
-  let up = new THREE.Vector3(0, 1, 0);
+  function smoothPulse(f) {
+    return Math.pow(Math.sin(Math.PI * f), 2);
+  }
+
+  function smoothClosedPoints(input, iterations = 3, alpha = 0.3) {
+    let pts = input.map(p => p.clone());
+    for (let iter = 0; iter < iterations; iter++) {
+      const next = [];
+      for (let i = 0; i < pts.length; i++) {
+        const prev = pts[(i - 1 + pts.length) % pts.length];
+        const cur = pts[i];
+        const nxt = pts[(i + 1) % pts.length];
+        const neighborMid = prev.clone().add(nxt).multiplyScalar(0.5);
+        next.push(cur.clone().multiplyScalar(1 - alpha).add(neighborMid.multiplyScalar(alpha)));
+      }
+      pts = next;
+    }
+    return pts;
+  }
 
   const segments = [];
 
   function addHelix(center, axis, radius, turns, heightDelta, steps, chirality) {
+    const a = axis.clone().normalize();
     for (let i = 0; i <= steps; i++) {
       const f = i / steps;
       const angle = f * turns * Math.PI * 2 * chirality;
-      const perp1 = new THREE.Vector3().crossVectors(axis, new THREE.Vector3(0, 1, 0));
-      if (perp1.length() < 0.01) perp1.crossVectors(axis, new THREE.Vector3(1, 0, 0));
+      const perp1 = new THREE.Vector3().crossVectors(a, new THREE.Vector3(0, 1, 0));
+      if (perp1.length() < 0.01) perp1.crossVectors(a, new THREE.Vector3(1, 0, 0));
       perp1.normalize();
-      const perp2 = new THREE.Vector3().crossVectors(axis, perp1).normalize();
-      const r = radius * (1 - 0.3 * Math.sin(f * Math.PI));
+      const perp2 = new THREE.Vector3().crossVectors(a, perp1).normalize();
+      const r = radius * (1 - 0.12 * Math.sin(f * Math.PI));
       const p = center.clone()
-        .add(axis.clone().multiplyScalar(f * heightDelta))
+        .add(a.clone().multiplyScalar(f * heightDelta))
         .add(perp1.clone().multiplyScalar(Math.cos(angle) * r))
         .add(perp2.clone().multiplyScalar(Math.sin(angle) * r));
       segments.push(p);
@@ -95,15 +115,16 @@ function generateTrack() {
   }
 
   function addCorkscrew(origin, axis, radius, turns, length, steps) {
+    const a = axis.clone().normalize();
     const perp1 = new THREE.Vector3(1, 0, 0);
-    if (Math.abs(axis.dot(perp1)) > 0.9) perp1.set(0, 0, 1);
-    perp1.cross(axis).normalize();
-    const perp2 = new THREE.Vector3().crossVectors(axis, perp1).normalize();
+    if (Math.abs(a.dot(perp1)) > 0.9) perp1.set(0, 0, 1);
+    perp1.cross(a).normalize();
+    const perp2 = new THREE.Vector3().crossVectors(a, perp1).normalize();
     for (let i = 0; i <= steps; i++) {
       const f = i / steps;
       const angle = f * turns * Math.PI * 2;
-      const along = axis.clone().multiplyScalar(f * length);
-      const r = radius * (1 + 0.3 * Math.sin(f * Math.PI * 4));
+      const along = a.clone().multiplyScalar(f * length);
+      const r = radius * (1 + 0.08 * Math.sin(f * Math.PI * 2));
       const cx = perp1.clone().multiplyScalar(Math.cos(angle) * r);
       const cy = perp2.clone().multiplyScalar(Math.sin(angle) * r);
       segments.push(origin.clone().add(along).add(cx).add(cy));
@@ -119,9 +140,10 @@ function generateTrack() {
     for (let i = 0; i <= steps; i++) {
       const f = i / steps;
       const along = d.clone().multiplyScalar(f * length);
-      const wobble = perp1.clone().multiplyScalar(Math.sin(f * freqX * Math.PI * 2) * ampX)
-        .add(new THREE.Vector3(0, Math.sin(f * freqY * Math.PI * 2) * ampY, 0))
-        .add(perp2.clone().multiplyScalar(Math.sin(f * freqZ * Math.PI * 2) * ampZ));
+      const wobbleEnvelope = smoothPulse(f);
+      const wobble = perp1.clone().multiplyScalar(Math.sin(f * freqX * Math.PI * 2) * ampX * wobbleEnvelope)
+        .add(new THREE.Vector3(0, Math.sin(f * freqY * Math.PI * 2) * ampY * wobbleEnvelope, 0))
+        .add(perp2.clone().multiplyScalar(Math.sin(f * freqZ * Math.PI * 2) * ampZ * wobbleEnvelope));
       segments.push(start.clone().add(along).add(wobble));
     }
   }
@@ -132,61 +154,61 @@ function generateTrack() {
   addStraightWithSine(
     new THREE.Vector3(-250, 15, 0),
     new THREE.Vector3(1, 0, 0.05),
-    280, 20, 2, 30, 3, 12, 1.5, 100
+    300, 12, 1.4, 18, 2.2, 8, 1.2, 140
   );
 
   // 2. Sweeping left-turn helix up (big radius)
   addHelix(
     segments[segments.length - 1].clone().add(new THREE.Vector3(0, 0, 60)),
-    new THREE.Vector3(0, 1, 0.1),
-    70, 1, 45, 150, 1
+    new THREE.Vector3(0, 1, 0.06),
+    72, 0.85, 36, 180, 1
   );
 
   // 3. Gentle spiral drop
-  addSpiralDrop(150, 35, 50, 2);
+  addSpiralDrop(180, 26, 44, 1.5);
 
   // 4. Zigzag section — wide alternating turns
-  for (let z = 0; z < 4; z++) {
+  for (let z = 0; z < 3; z++) {
     const sign = z % 2 === 0 ? 1 : -1;
     addStraightWithSine(
       segments[segments.length - 1].clone(),
-      new THREE.Vector3(sign, 0.05, 0.4 * sign).normalize(),
-      120, 8, 1.5, 20, 2, 8, 1, 60
+      new THREE.Vector3(0.9 * sign, 0.03, 0.28 * sign).normalize(),
+      130, 4, 1.1, 10, 1.5, 4, 0.8, 90
     );
   }
 
-  // 5. Big vertical loop
-  const loopCenter = segments[segments.length - 1].clone().add(new THREE.Vector3(0, 30, 0));
+  // 5. Vertical loop (smoother)
+  const loopCenter = segments[segments.length - 1].clone().add(new THREE.Vector3(0, 22, 0));
   const loopAxis = new THREE.Vector3(0, 0, 1);
-  addCorkscrew(loopCenter.clone(), loopAxis, 35, 1, 15, 180);
+  addCorkscrew(loopCenter.clone(), loopAxis, 26, 0.9, 12, 220);
 
   // 6. Right-turn helix DOWN (gentle)
   addHelix(
     segments[segments.length - 1].clone().add(new THREE.Vector3(0, 0, -50)),
-    new THREE.Vector3(0, -1, -0.15),
-    60, 1, -30, 120, -1
+    new THREE.Vector3(0, -1, -0.08),
+    58, 0.8, -22, 160, -1
   );
 
   // 7. S-bend serpentine (wide)
-  for (let s = 0; s < 3; s++) {
+  for (let s = 0; s < 2; s++) {
     const sign = s % 2 === 0 ? 1 : -1;
     addStraightWithSine(
       segments[segments.length - 1].clone(),
       new THREE.Vector3(0.2, 0, sign).normalize(),
-      150, 40, 0.7, 12, 1.5, 20, 1, 80
+      160, 24, 0.45, 8, 1, 12, 0.7, 100
     );
   }
 
-  // 8. Double corkscrew (wide)
+  // 8. Wide corkscrew
   const csStart = segments[segments.length - 1].clone();
-  addCorkscrew(csStart, new THREE.Vector3(1, 0.2, 0.15).normalize(), 30, 1.5, 180, 200);
+  addCorkscrew(csStart, new THREE.Vector3(1, 0.16, 0.12).normalize(), 24, 1, 140, 260);
 
   // 9. Bunny hops (gentle)
-  for (let h = 0; h < 5; h++) {
+  for (let h = 0; h < 4; h++) {
     addStraightWithSine(
       segments[segments.length - 1].clone(),
       new THREE.Vector3(0.7, 0, -0.4).normalize(),
-      60, 5, 1, 18, 0.5, 5, 1, 30
+      70, 3, 0.7, 10, 0.45, 3, 0.7, 40
     );
   }
 
@@ -194,34 +216,36 @@ function generateTrack() {
   addHelix(
     new THREE.Vector3(0, 30, 0),
     new THREE.Vector3(0, 1, 0),
-    200, 0.5, -5, 120, -1
+    220, 0.45, -4, 160, -1
   );
 
   // Close the loop smoothly back to the beginning
   const first = segments[0];
   const last = segments[segments.length - 1];
-  for (let i = 0; i < 30; i++) {
-    const f = (i + 1) / 30;
+  for (let i = 0; i < 60; i++) {
+    const f = (i + 1) / 60;
     segments.push(lerp3(last, first, f));
   }
 
+  const smoothedSegments = smoothClosedPoints(segments, 3, 0.3);
+
   // Clamp minimum height so track never goes below ground
   const minY = 8;
-  for (const p of segments) {
+  for (const p of smoothedSegments) {
     if (p.y < minY) p.y = minY;
   }
 
   // Resample and re-clamp to prevent interpolation dips
-  const curve = new THREE.CatmullRomCurve3(segments, true);
+  const curve = new THREE.CatmullRomCurve3(smoothedSegments, true, 'catmullrom', 0.15);
   const resampled = [];
-  const sampleCount = 2000;
+  const sampleCount = 2800;
   for (let i = 0; i < sampleCount; i++) {
     const p = curve.getPointAt(i / sampleCount);
     if (p.y < minY) p.y = minY;
     resampled.push(p);
   }
 
-  return new THREE.CatmullRomCurve3(resampled, true);
+  return new THREE.CatmullRomCurve3(resampled, true, 'catmullrom', 0.12);
 }
 
 const trackCurve = generateTrack();
@@ -656,11 +680,13 @@ for (let i = 0; i < 12; i++) {
 // --- CAMERA PATH ---
 let t = 0;
 const cameraSpeed = 0.00008;
-let prevPos = trackCurve.getPointAt(0);
 const speedDisplay = document.getElementById('speed');
-const smoothQuat = new THREE.Quaternion();
 const smoothTarget = new THREE.Vector3();
+const smoothPos = new THREE.Vector3();
+let smoothSpeedMult = 0.7;
 let firstFrame = true;
+const precomputedFrames = trackCurve.computeFrenetFrames(2400, true);
+const frameCount = precomputedFrames.tangents.length;
 
 // --- SHOCKWAVE / MOTION BLUR POST-STYLE ---
 const cometTrailGeo = new THREE.BufferGeometry();
@@ -737,56 +763,69 @@ for (let i = 0; i < 15; i++) {
 
 // --- ANIMATE ---
 const clock = new THREE.Clock();
+let paused = false;
+const pauseEl = document.getElementById('pause');
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'KeyP') {
+    paused = !paused;
+    pauseEl.style.display = paused ? 'block' : 'none';
+    if (!paused) clock.getDelta();
+  }
+});
 
 function animate() {
   requestAnimationFrame(animate);
+  if (paused) return;
   const elapsed = clock.getElapsedTime();
-  const delta = clock.getDelta();
 
   // Speed variation — faster downhill, slower climbing
   const tangentRaw = trackCurve.getTangentAt(t);
   const verticalAngle = Math.asin(Math.max(-1, Math.min(1, tangentRaw.y)));
-  const speedMult = 0.4 + Math.max(0, -verticalAngle) * 0.8 + Math.sin(elapsed * 0.5) * 0.08;
-  t = (t + cameraSpeed * speedMult) % 1;
+  const rawSpeedMult = 0.55 + Math.max(0, -verticalAngle) * 0.55 + Math.sin(elapsed * 0.35) * 0.03;
+  smoothSpeedMult += (rawSpeedMult - smoothSpeedMult) * 0.05;
+  t = (t + cameraSpeed * smoothSpeedMult) % 1;
 
   const pos = trackCurve.getPointAt(t);
-  const lookT = (t + 0.012) % 1;
+  const lookT = (t + 0.016) % 1;
   const lookAt = trackCurve.getPointAt(lookT);
 
-  const frames = trackCurve.computeFrenetFrames(2000, true);
-  const frameIndex = Math.floor(t * 2000) % 2000;
-  const lookFrameIndex = Math.floor(lookT * 2000) % 2000;
+  const frameIndex = Math.floor(t * frameCount) % frameCount;
+  const lookFrameIndex = Math.floor(lookT * frameCount) % frameCount;
 
-  const tangent = frames.tangents[frameIndex];
-  const lookTangent = frames.tangents[lookFrameIndex];
+  const tangent = precomputedFrames.tangents[frameIndex];
+  const lookTangent = precomputedFrames.tangents[lookFrameIndex];
 
   const worldUp = new THREE.Vector3(0, 1, 0);
   const right = new THREE.Vector3().crossVectors(tangent, worldUp).normalize();
   const trueUp = new THREE.Vector3().crossVectors(right, tangent).normalize();
 
-  camera.position.copy(pos).addScaledVector(trueUp, 3.0).addScaledVector(tangent, -1.5);
+  const rawPos = pos.clone().addScaledVector(trueUp, 2.8).addScaledVector(tangent, -1.3);
 
   const lookRight = new THREE.Vector3().crossVectors(lookTangent, worldUp).normalize();
   const lookUp = new THREE.Vector3().crossVectors(lookRight, lookTangent).normalize();
 
-  const rawTarget = lookAt.clone().addScaledVector(lookUp, 3.0).addScaledVector(lookTangent, -1.5);
+  const rawTarget = lookAt.clone().addScaledVector(lookUp, 2.8).addScaledVector(lookTangent, -1.3);
   if (firstFrame) {
+    smoothPos.copy(rawPos);
     smoothTarget.copy(rawTarget);
     firstFrame = false;
   }
-  smoothTarget.lerp(rawTarget, 0.08);
+  smoothPos.lerp(rawPos, 0.12);
+  smoothTarget.lerp(rawTarget, 0.1);
+  camera.position.copy(smoothPos);
   camera.lookAt(smoothTarget);
 
   // Camera tilt on turns — smoothed
-  const tanAhead = trackCurve.getTangentAt((t + 0.006) % 1);
+  const tanAhead = trackCurve.getTangentAt((t + 0.01) % 1);
   const lateral = new THREE.Vector3().crossVectors(tangent, tanAhead);
   const turnDir = lateral.y;
-  const rawTilt = Math.max(-0.18, Math.min(0.18, -turnDir * 5));
+  const rawTilt = Math.max(-0.1, Math.min(0.1, -turnDir * 2.4));
   const curTilt = camera.rotation.z;
-  camera.rotation.z = curTilt + (rawTilt - curTilt) * 0.06;
+  camera.rotation.z = curTilt + (rawTilt - curTilt) * 0.08;
 
   // Speed display
-  const speed = Math.round(15 + speedMult * 50);
+  const speed = Math.round(15 + smoothSpeedMult * 50);
   speedDisplay.textContent = speed + ' km/h';
 
   // Update uniforms
@@ -818,7 +857,7 @@ function animate() {
 
   // Animate cars along the track
   cars.forEach(car => {
-    car.t = (car.t + car.speed * speedMult) % 1;
+    car.t = (car.t + car.speed * smoothSpeedMult) % 1;
     const carPos = trackCurve.getPointAt(car.t);
     const carAhead = trackCurve.getPointAt((car.t + 0.003) % 1);
     const tangent = new THREE.Vector3().subVectors(carAhead, carPos).normalize();

@@ -63,7 +63,7 @@ export class EnemyManager {
   /**
    * Actualiza la generación y lógica de enemigos
    */
-  public update(delta: number, playerGlobalX: number): void {
+  public update(delta: number, playerScreenX: number, playerScreenY: number = 0): void {
     const scrollOffset = this.terrain.getScrollOffset();
     
     // El borde derecho de la pantalla en coords globales
@@ -89,15 +89,17 @@ export class EnemyManager {
 
       // Lógica específica de misiles enemigos
       if (enemy.type === EnemyType.MISSILE) {
-        // Despegan si el jugador se acerca (ej: a menos de 15 unidades de distancia horizontal)
-        // Ojo: screenX del jugador suele estar entre -10 y 0. Consideremos -5 como centro
-        const PLAYER_SCREEN_X = -WORLD_WIDTH / 2 + 6; 
-        const distanceToPlayer = screenX - PLAYER_SCREEN_X;
+        // Lanzar cuando el misil está cerca en X y ajustar su velocidad para
+        // interceptar la altura actual del jugador cuando se crucen.
+        const distanceToPlayer = screenX - playerScreenX;
 
-        if (!enemy.launched && distanceToPlayer < 18 && distanceToPlayer > 0 && Math.random() < 0.05) {
-          // Probabilidad de despegue para no ser todos a la vez de forma robótica
+        if (!enemy.launched && distanceToPlayer > 0 && distanceToPlayer <= 10) {
+          const timeToReachPlayerX = Math.max(0.15, distanceToPlayer / SCROLL_SPEED);
+          const desiredLaunchSpeed = (playerScreenY - enemy.baseY) / timeToReachPlayerX;
+          const launchSpeed = THREE.MathUtils.clamp(desiredLaunchSpeed, 2, 16);
+
           enemy.launched = true;
-          enemy.velocity = new THREE.Vector2(0, 10); // Velocidad vertical
+          enemy.velocity = new THREE.Vector2(0, launchSpeed);
           
           // Cambiamos color del motor a rojo para indicar que está activo
           const engine = enemy.mesh.children.find(c => c.name === 'engine') as THREE.Mesh;
